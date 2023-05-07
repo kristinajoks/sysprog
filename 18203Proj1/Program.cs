@@ -124,8 +124,8 @@ namespace _18203Proj1
         public static Bitmap[,] parallelImageProcess(Bitmap[,] bmp)
         {
 
-            int broj_niti = Environment.ProcessorCount;
-            Console.WriteLine($"Dostupan broj niti je: {broj_niti}");
+            int thNum = Environment.ProcessorCount;
+            Console.WriteLine($"Number of threads: {thNum}");
             int worker_niti, io_niti;
             ThreadPool.GetAvailableThreads(out worker_niti, out io_niti);
 
