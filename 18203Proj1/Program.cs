@@ -8,7 +8,6 @@ namespace _18203Proj1
     class Program
     {
         static HttpListener listener = new HttpListener();
-        static HttpClient client = new HttpClient();
         static LocalCache cache = new LocalCache();
         static Stopwatch stopwatch = new Stopwatch();
 
@@ -136,7 +135,7 @@ namespace _18203Proj1
                 {
                     try
                     {
-                        lock (locker)
+                        lock (bitmap)
                         {
                             int width = bitmap.Width;
                             int height = bitmap.Height;
