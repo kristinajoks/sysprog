@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "LqeTOfhx69/ZPUUTEx0GbPQR7awU6ICdzKyLU9fGe64qpA7KKDgbvcST/a1Gdu/jKkYOpZ3EzgUAIKvq8C1i+A==",
+  "dgSpecHash": "VGP6xuI17ZRm9BZqy7r2gLOuIQfK1pTks6nee69yuxAApks9w+mDK3Y5nmU/TfOKSxNrWMr4xb/5yxt4THPQGA==",
   "success": true,
-  "projectFilePath": "C:\\Users\\krist\\Downloads\\3. godina\\SP\\18203Proj1\\18203Proj1.csproj",
+  "projectFilePath": "C:\\Users\\krist\\sysprog\\18203Proj1\\18203Proj1.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\krist\\.nuget\\packages\\aspose.imaging\\23.4.0\\aspose.imaging.23.4.0.nupkg.sha512",
     "C:\\Users\\krist\\.nuget\\packages\\microsoft.netcore.platforms\\5.0.0\\microsoft.netcore.platforms.5.0.0.nupkg.sha512",

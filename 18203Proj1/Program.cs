@@ -1,11 +1,6 @@
-﻿//using Newtonsoft.Json.Linq;
-using System.Net;
+﻿using System.Net;
 using System.Diagnostics;
 using System.Drawing;
-//using Aspose.Imaging;
-//using Image = Aspose.Imaging.Image; 
-//using Size = System.Drawing.Size;
-
 
 class Program
 {
@@ -155,7 +150,6 @@ class Program
                 //ubacivanje slika u rezultujucu mapu
                 using (Graphics canvas = Graphics.FromImage(res))
                 {
-                    //proba sa param u rect
                     canvas.DrawImage(bitmaps[i,j], new Rectangle(i * tilesize.Width, j * tilesize.Height, tilesize.Width, tilesize.Height), movingTile, GraphicsUnit.Pixel);
                 }
             }

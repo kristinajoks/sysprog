@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\krist\\Downloads\\3. godina\\SP\\18203Proj1\\18203Proj1.csproj": {}
+    "C:\\Users\\krist\\sysprog\\18203Proj1\\18203Proj1.csproj": {}
   },
   "projects": {
-    "C:\\Users\\krist\\Downloads\\3. godina\\SP\\18203Proj1\\18203Proj1.csproj": {
+    "C:\\Users\\krist\\sysprog\\18203Proj1\\18203Proj1.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\krist\\Downloads\\3. godina\\SP\\18203Proj1\\18203Proj1.csproj",
+        "projectUniqueName": "C:\\Users\\krist\\sysprog\\18203Proj1\\18203Proj1.csproj",
         "projectName": "18203Proj1",
-        "projectPath": "C:\\Users\\krist\\Downloads\\3. godina\\SP\\18203Proj1\\18203Proj1.csproj",
+        "projectPath": "C:\\Users\\krist\\sysprog\\18203Proj1\\18203Proj1.csproj",
         "packagesPath": "C:\\Users\\krist\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\krist\\Downloads\\3. godina\\SP\\18203Proj1\\obj\\",
+        "outputPath": "C:\\Users\\krist\\sysprog\\18203Proj1\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\krist\\AppData\\Roaming\\NuGet\\NuGet.Config",
