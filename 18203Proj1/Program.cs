@@ -10,13 +10,14 @@ namespace _18203Proj1
         static HttpListener listener = new HttpListener();
         static HttpClient client = new HttpClient();
         static LocalCache cache = new LocalCache();
+        static Stopwatch stopwatch = new Stopwatch();
 
         public static void ServerDivided()
         {
             listener.Prefixes.Add("http://localhost:5050/");
             listener.Start();
 
-            Console.WriteLine("Listening on port 5050...");
+            Console.WriteLine("Listening on port 5050...\n");
 
             while (true)
             {
@@ -26,6 +27,8 @@ namespace _18203Proj1
                     HttpListenerRequest request = context.Request;
 
                     Console.WriteLine($"Recieved request for {request.Url}");
+
+                    stopwatch.Restart();
 
                     if (request.Url == null)
                     {
@@ -42,10 +45,12 @@ namespace _18203Proj1
 
                     if (cache.containReq(request.Url.ToString()))
                     {
+                        Console.WriteLine("Found in cache");
                         cache.tryGetValue(request.Url.ToString(), out final);
                     }
                     else
                     {
+                        Console.WriteLine("Not found in cache");
                         string localPath = "C:\\Users\\krist\\sysprog\\18203Proj1\\photos\\";
                         string path = localPath + request.Url.LocalPath;
 
@@ -60,7 +65,7 @@ namespace _18203Proj1
 
                         Bitmap imgFile = new Bitmap(path);
                         Bitmap[,] tiles = makeTiles((object)imgFile);
-                        //Bitmap[,] res = parallelImageProcess(tiles);
+                        Bitmap[,] res = parallelImageProcess(tiles);
                         final = joinTiles(tiles, imgFile);
 
                         cache.addReq(request.Url.ToString(), final);
@@ -68,6 +73,10 @@ namespace _18203Proj1
 
                     byte[] resArray = toByteArr(final, System.Drawing.Imaging.ImageFormat.Bmp);
                     stream.Write(resArray, 0, resArray.Length);
+
+                    stopwatch.Stop();
+
+                    Console.WriteLine($"Response time: {stopwatch.Elapsed}\n");
                 }
                 catch (Exception ex)
                 {
@@ -110,6 +119,8 @@ namespace _18203Proj1
 
             return bmparray;
         }
+        
+        static object locker = new object();
 
         public static Bitmap[,] parallelImageProcess(Bitmap[,] bmp)
         {
@@ -123,26 +134,41 @@ namespace _18203Proj1
             {
                 ThreadPool.QueueUserWorkItem((state) =>
                 {
-                    lock (bitmap)
+                    try
                     {
-                        int width = bitmap.Width;
-                        int height = bitmap.Height;
-
-                        for (int i = 0; i < width; i++)
+                        lock (locker)
                         {
-                            for (int j = 0; j < height; j++)
+                            int width = bitmap.Width;
+                            int height = bitmap.Height;
+
+                            for (int i = 0; i < width; i++)
                             {
-                                Color oldPixel = bitmap.GetPixel(i, j);
+                                for (int j = 0; j < height; j++)
+                                {
+                                    Color oldPixel = bitmap.GetPixel(i, j);
 
-                                int grayScale = (int)((oldPixel.R * 0.229) + (oldPixel.G * 0.587) + (oldPixel.B * 0.114));
-                                Color newPixel = Color.FromArgb(grayScale, grayScale, grayScale);
+                                    int grayScale = (int)((oldPixel.R * 0.229) + (oldPixel.G * 0.587) + (oldPixel.B * 0.114));
+                                    Color newPixel = Color.FromArgb(grayScale, grayScale, grayScale);
 
-                                bitmap.SetPixel(i, j, newPixel);
+                                    bitmap.SetPixel(i, j, newPixel);
+                                }
                             }
                         }
                     }
+                    catch(Exception ex)
+                    {
+                        Console.WriteLine(ex.Message);
+                    }
                 });
             }
+
+            bool done = false; 
+            while (!done)
+            {
+                Thread.Sleep(1000);
+                done = ThreadPool.PendingWorkItemCount == 0;
+            }
+
             return bmp;
         }
 
@@ -172,7 +198,7 @@ namespace _18203Proj1
 
         static void Main(string[] args)
         {
-            ServerDivided();
+            ServerDivided();                       
         }
 
     }
