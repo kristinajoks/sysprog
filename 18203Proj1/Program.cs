@@ -2,6 +2,7 @@
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+//using Aspose.Imaging;
 
 namespace _18203Proj1
 {
@@ -18,6 +19,9 @@ namespace _18203Proj1
 
             Console.WriteLine("Listening on port 5050...\n");
 
+            string localPath = "C:\\Users\\krist\\sysprog\\18203Proj1\\photos\\";
+            cache.addReq("http://localhost:5050/favicon.ico", new Bitmap($"{localPath}favicon.ico"));
+
             while (true)
             {
                 try
@@ -25,7 +29,7 @@ namespace _18203Proj1
                     HttpListenerContext context = listener.GetContextAsync().Result;
                     HttpListenerRequest request = context.Request;
 
-                    Console.WriteLine($"Recieved request for {request.Url}");
+                    LogRequest(request);
 
                     stopwatch.Restart();
 
@@ -34,23 +38,20 @@ namespace _18203Proj1
                         throw new HttpRequestException();
                     }
 
-
                     HttpListenerResponse response = context.Response;
                     response.Headers.Set("Content-type", "image/jpg");
 
                     Stream stream = response.OutputStream;
-
                     Bitmap final;
 
                     if (cache.containReq(request.Url.ToString()))
                     {
-                        Console.WriteLine("Found in cache");
+                        Console.WriteLine($"Resource {request.RawUrl} found in cache\n");
                         cache.tryGetValue(request.Url.ToString(), out final);
                     }
                     else
                     {
-                        Console.WriteLine("Not found in cache");
-                        string localPath = "C:\\Users\\krist\\sysprog\\18203Proj1\\photos\\";
+                        Console.WriteLine($"Resource {request.RawUrl} not found in cache\n");
                         string path = localPath + request.Url.LocalPath;
 
                         byte[] buffer = File.ReadAllBytes(path);
@@ -58,24 +59,24 @@ namespace _18203Proj1
                         if (request.Url.AbsolutePath == "/favicon.ico") 
                         {
                             stream.Write(buffer, 0, buffer.Length);
-                            cache.addReq(request.Url.ToString(), new Bitmap(path)); //revise
                             return;
                         }
 
                         Bitmap imgFile = new Bitmap(path);
-                        Bitmap[,] tiles = makeTiles((object)imgFile);
-                        Bitmap[,] res = parallelImageProcess(tiles);
-                        final = joinTiles(tiles, imgFile);
+                        Bitmap[,] tiles = MakeTiles((object)imgFile);
+                        Bitmap[,] res = ParallelImageProcess(tiles);
+                        final = JoinTiles(tiles, imgFile);
 
                         cache.addReq(request.Url.ToString(), final);
                     }
 
-                    byte[] resArray = toByteArr(final, System.Drawing.Imaging.ImageFormat.Bmp);
+                    byte[] resArray = ToByteArr(final, System.Drawing.Imaging.ImageFormat.Bmp);
+                    response.ContentLength64 = resArray.Length;
                     stream.Write(resArray, 0, resArray.Length);
 
                     stopwatch.Stop();
 
-                    Console.WriteLine($"Response time: {stopwatch.Elapsed}\n");
+                    LogResponse(response, request.RawUrl);
                 }
                 catch (Exception ex)
                 {
@@ -84,7 +85,130 @@ namespace _18203Proj1
             }
         }
 
-        public static byte[] toByteArr(Bitmap bitmap, System.Drawing.Imaging.ImageFormat format)
+        public static object consoleLocker = new object();
+        public static object cacheLocker = new object();
+
+        public static void ServerPool()
+        {
+            listener.Prefixes.Add("http://localhost:5050/");
+            listener.Start();
+
+            Console.WriteLine("Listening on port 5050...\n");
+
+            string localPath = "C:\\Users\\krist\\sysprog\\18203Proj1\\photos\\";
+            cache.addReq("http://localhost:5050/favicon.ico", new Bitmap($"{localPath}favicon.ico"));
+
+            while (true)
+            {
+                ThreadPool.QueueUserWorkItem((state) =>
+                {
+                    try
+                    {
+                        HttpListenerContext context = listener.GetContextAsync().Result;
+                        HttpListenerRequest request = context.Request;
+
+                        lock (consoleLocker)
+                        {
+                            LogRequest(request);
+                        }
+
+                        stopwatch.Restart();
+
+                        if (request.Url == null)
+                        {
+                            throw new HttpRequestException();
+                        }
+
+                        HttpListenerResponse response = context.Response;
+                        response.Headers.Set("Content-type", "image/jpg");
+                        Stream stream = response.OutputStream;
+                        Bitmap final;
+
+                        bool found = false;
+                        lock (cacheLocker)
+                        {
+                            found = cache.containReq(request.Url.ToString());
+                        }
+
+                        if (found)
+                        {
+                            lock (consoleLocker)
+                            {
+                                Console.WriteLine($"Resource {request.RawUrl} found in cache\n");
+                            }
+                            lock (cacheLocker)
+                            {
+                                cache.tryGetValue(request.Url.ToString(), out final);
+                            }
+                        }
+                        else
+                        {
+                            lock (consoleLocker)
+                            {
+                                Console.WriteLine($"Resource {request.RawUrl} not found in cache\n");
+                            }
+                            string localPath = "C:\\Users\\krist\\sysprog\\18203Proj1\\photos\\";
+                            string path = localPath + request.Url.LocalPath;
+                            byte[] buffer = File.ReadAllBytes(path);
+
+                            if (request.Url.AbsolutePath == "/favicon.ico")
+                            {
+                                stream.Write(buffer, 0, buffer.Length);
+                                return;
+                            }
+
+                            Bitmap imgFile = new Bitmap(path);
+                            final = SingleThreadedImageProcess(imgFile);
+
+                            lock (cacheLocker)
+                            {
+                                cache.addReq(request.Url.ToString(), final);
+                            }
+                        }
+
+                        byte[] resArray = ToByteArr(final, System.Drawing.Imaging.ImageFormat.Bmp);
+                        response.ContentLength64 = resArray.Length;
+                        stream.Write(resArray, 0, resArray.Length);
+
+                        stopwatch.Stop();
+
+                        lock (consoleLocker)
+                        {
+                            LogResponse(response, request.RawUrl);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(ex.Message);
+                    }
+                });
+            }
+        }
+
+        #region logging
+        public static void LogRequest(HttpListenerRequest request)
+        {
+            Console.WriteLine("--------------------------------------------------------------");
+            Console.WriteLine($"Recieved request for: {request.RawUrl} by: {request.UserHostName}");
+            Console.WriteLine($"Http method: {request.HttpMethod}");
+            Console.WriteLine($"Protocol version: {request.ProtocolVersion}\n");
+            Console.WriteLine($"Headers: {request.Headers}");
+            Console.WriteLine("--------------------------------------------------------------");
+        }
+
+        public static void LogResponse(HttpListenerResponse response, string resource)
+        {
+            Console.WriteLine("--------------------------------------------------------------");
+            Console.WriteLine($"{resource} retrieved");
+            Console.WriteLine($"Response status: {response.StatusCode} {response.StatusDescription}");
+            Console.WriteLine($"Response time: {stopwatch.Elapsed}");
+            Console.WriteLine($"Protocol version: {response.ProtocolVersion}");
+            Console.WriteLine($"Content type: {response.ContentType}");
+            Console.WriteLine("--------------------------------------------------------------");
+        }
+        #endregion
+
+        public static byte[] ToByteArr(Bitmap bitmap, System.Drawing.Imaging.ImageFormat format)
         {
             using (MemoryStream ms = new MemoryStream())
             {
@@ -93,7 +217,8 @@ namespace _18203Proj1
             }
         }
 
-        public static Bitmap[,] makeTiles(object bmap)
+        #region poolImageManipulation
+        public static Bitmap[,] MakeTiles(object bmap)
         {
             Bitmap bmp = (Bitmap)bmap;
             Size tilesize = new Size(bmp.Width / 4, bmp.Height / 3);
@@ -119,15 +244,10 @@ namespace _18203Proj1
             return bmparray;
         }
         
-        static object locker = new object();
-
-        public static Bitmap[,] parallelImageProcess(Bitmap[,] bmp)
+        public static Bitmap[,] ParallelImageProcess(Bitmap[,] bmp)
         {
-
             int thNum = Environment.ProcessorCount;
-            Console.WriteLine($"Number of threads: {thNum}");
-            int worker_niti, io_niti;
-            ThreadPool.GetAvailableThreads(out worker_niti, out io_niti);
+            Console.WriteLine($"Number of threads processing image: {thNum}\n");
 
             foreach (Bitmap bitmap in bmp)
             {
@@ -171,7 +291,7 @@ namespace _18203Proj1
             return bmp;
         }
 
-        public static Bitmap joinTiles(Bitmap[,] bitmaps, Bitmap original)
+        public static Bitmap JoinTiles(Bitmap[,] bitmaps, Bitmap original)
         {
             Size tilesize = new Size(original.Width / 4, original.Height / 3);
             Bitmap res = new Bitmap(original.Width, original.Height);
@@ -194,10 +314,33 @@ namespace _18203Proj1
 
             return res;
         }
+        #endregion
+
+        public static Bitmap SingleThreadedImageProcess(Bitmap bmp)
+        {
+                int width = bmp.Width;
+                int height = bmp.Height;
+
+                for (int i = 0; i < width; i++)
+                {
+                    for (int j = 0; j < height; j++)
+                    {
+                        Color oldPixel = bmp.GetPixel(i, j);
+
+                        int grayScale = (int)((oldPixel.R * 0.229) + (oldPixel.G * 0.587) + (oldPixel.B * 0.114));
+                        Color newPixel = Color.FromArgb(grayScale, grayScale, grayScale);
+
+                        bmp.SetPixel(i, j, newPixel);
+                    }
+                }                        
+            
+            return bmp;
+        }
 
         static void Main(string[] args)
         {
-            ServerDivided();                       
+            //ServerDivided();           
+            ServerPool();
         }
 
     }
