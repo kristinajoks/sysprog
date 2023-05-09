@@ -11,6 +11,7 @@ namespace _18203Proj1
         static LocalCache cache = new LocalCache();
         static Stopwatch stopwatch = new Stopwatch();
 
+        //singlethreaded server + multithreaded picture processing
         public static void ServerDivided()
         {
             listener.Prefixes.Add("http://localhost:5050/");
@@ -86,6 +87,7 @@ namespace _18203Proj1
 
         public static object cacheLocker = new object();
 
+        //multithreaded server + 2 way picture processing
         public static void ServerPool()
         {
             listener.Prefixes.Add("http://localhost:5050/");
@@ -149,11 +151,11 @@ namespace _18203Proj1
                             }
 
                             Bitmap imgFile = new Bitmap(path);
-                            final = SingleThreadedImageProcess(imgFile);
+                            //final = SingleThreadedImageProcess(imgFile);
 
-                            //Bitmap[,] tiles = MakeTiles((object)imgFile);
-                            //Bitmap[,] res = MultithreadedImageProcess(tiles);
-                            //final = JoinTiles(res, imgFile);
+                            Bitmap[,] tiles = MakeTiles((object)imgFile);
+                            Bitmap[,] res = MultithreadedImageProcess(tiles);
+                            final = JoinTiles(res, imgFile);
 
                             lock (cacheLocker)
                             {
@@ -380,8 +382,11 @@ namespace _18203Proj1
 
         static void Main(string[] args)
         {
-            ServerDivided();           
-            //ServerPool();
+            //ServerDivided();           
+            ServerPool();
+
+            //Zakljucak: Najbrza verzija je jednonitni server sa visenitnom obradom slike, nakon njega su (sa malom razlikom) visenitni server i visenitna obrada, 
+            //a ubedljivo najsporiji je visenitni server sa jednonitnom obradom
         }
 
     }
