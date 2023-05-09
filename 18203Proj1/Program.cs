@@ -2,7 +2,6 @@
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
-//using Aspose.Imaging;
 
 namespace _18203Proj1
 {
@@ -335,6 +334,8 @@ namespace _18203Proj1
             int thNum = Environment.ProcessorCount;
             Console.WriteLine($"Number of threads processing image: {thNum}\n");
 
+            List<Thread> threads = new List<Thread>();
+
             foreach (Bitmap bitmap in bmp)
             {
                 Thread worker = new Thread((state) =>
@@ -365,14 +366,22 @@ namespace _18203Proj1
                         Console.WriteLine(ex.Message);
                     }
                 });
+                worker.Start();
+                threads.Add(worker);
             }
+            
+            foreach(Thread th in threads)
+            {
+                th.Join();
+            }
+
             return bmp;
         }
 
         static void Main(string[] args)
         {
-            //ServerDivided();           
-            ServerPool();
+            ServerDivided();           
+            //ServerPool();
         }
 
     }
