@@ -65,7 +65,7 @@ namespace _18203Proj1
                         Bitmap imgFile = new Bitmap(path);
                         Bitmap[,] tiles = MakeTiles((object)imgFile);
                         Bitmap[,] res = ParallelImageProcess(tiles);
-                        final = JoinTiles(tiles, imgFile);
+                        final = JoinTiles(res, imgFile);
 
                         cache.addReq(request.Url.ToString(), final);
                     }
@@ -85,7 +85,6 @@ namespace _18203Proj1
             }
         }
 
-        public static object consoleLocker = new object();
         public static object cacheLocker = new object();
 
         public static void ServerPool()
@@ -107,10 +106,7 @@ namespace _18203Proj1
                         HttpListenerContext context = listener.GetContextAsync().Result;
                         HttpListenerRequest request = context.Request;
 
-                        lock (consoleLocker)
-                        {
-                            LogRequest(request);
-                        }
+                        LogRequest(request);
 
                         stopwatch.Restart();
 
@@ -132,21 +128,17 @@ namespace _18203Proj1
 
                         if (found)
                         {
-                            lock (consoleLocker)
-                            {
-                                Console.WriteLine($"Resource {request.RawUrl} found in cache\n");
-                            }
+                            Console.WriteLine($"Resource {request.RawUrl} found in cache\n");
+                            
                             lock (cacheLocker)
                             {
                                 cache.tryGetValue(request.Url.ToString(), out final);
                             }
                         }
                         else
-                        {
-                            lock (consoleLocker)
-                            {
-                                Console.WriteLine($"Resource {request.RawUrl} not found in cache\n");
-                            }
+                        {                            
+                            Console.WriteLine($"Resource {request.RawUrl} not found in cache\n");
+                            
                             string localPath = "C:\\Users\\krist\\sysprog\\18203Proj1\\photos\\";
                             string path = localPath + request.Url.LocalPath;
                             byte[] buffer = File.ReadAllBytes(path);
@@ -160,6 +152,10 @@ namespace _18203Proj1
                             Bitmap imgFile = new Bitmap(path);
                             final = SingleThreadedImageProcess(imgFile);
 
+                            //Bitmap[,] tiles = MakeTiles((object)imgFile);
+                            //Bitmap[,] res = MultithreadedImageProcess(tiles);
+                            //final = JoinTiles(res, imgFile);
+
                             lock (cacheLocker)
                             {
                                 cache.addReq(request.Url.ToString(), final);
@@ -171,11 +167,8 @@ namespace _18203Proj1
                         stream.Write(resArray, 0, resArray.Length);
 
                         stopwatch.Stop();
-
-                        lock (consoleLocker)
-                        {
-                            LogResponse(response, request.RawUrl);
-                        }
+                                                
+                        LogResponse(response, request.RawUrl);                        
                     }
                     catch (Exception ex)
                     {
@@ -337,6 +330,45 @@ namespace _18203Proj1
             return bmp;
         }
 
+        public static Bitmap[,] MultithreadedImageProcess(Bitmap[,] bmp)
+        {
+            int thNum = Environment.ProcessorCount;
+            Console.WriteLine($"Number of threads processing image: {thNum}\n");
+
+            foreach (Bitmap bitmap in bmp)
+            {
+                Thread worker = new Thread((state) =>
+                {
+                    try
+                    {
+                        lock (bitmap)
+                        {
+                            int width = bitmap.Width;
+                            int height = bitmap.Height;
+
+                            for (int i = 0; i < width; i++)
+                            {
+                                for (int j = 0; j < height; j++)
+                                {
+                                    Color oldPixel = bitmap.GetPixel(i, j);
+
+                                    int grayScale = (int)((oldPixel.R * 0.229) + (oldPixel.G * 0.587) + (oldPixel.B * 0.114));
+                                    Color newPixel = Color.FromArgb(grayScale, grayScale, grayScale);
+
+                                    bitmap.SetPixel(i, j, newPixel);
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(ex.Message);
+                    }
+                });
+            }
+            return bmp;
+        }
+
         static void Main(string[] args)
         {
             //ServerDivided();           
@@ -344,5 +376,4 @@ namespace _18203Proj1
         }
 
     }
-
 }
