@@ -56,7 +56,7 @@ namespace _18203Proj2
         public bool TryGetValue(string request, out Bitmap value)
         {
             bool status = this.cache.TryGetValue(request, out value);
-
+            
             if (status && (requests != null))
             {
                 bool x = this.requests.Remove(request);

@@ -16,6 +16,292 @@ namespace _18203Proj1
         static ReaderWriterLockSlim requestLock = new ReaderWriterLockSlim();
         static ReaderWriterLockSlim currentLock = new ReaderWriterLockSlim();
 
+        public static async Task ServerAsync()
+        {
+            try
+            {
+                listener.Prefixes.Add("http://localhost:5050/");
+                listener.Start();
+
+                Console.WriteLine("Listening on port 5050...\n");
+
+                string localPath = "C:\\Users\\krist\\sysprog\\18203Proj1\\photos\\";
+                               
+                cache.AddReq("http://localhost:5050/favicon.ico", new Bitmap($"{localPath}favicon.ico"));
+
+                while (true)
+                {
+                    try
+                    {
+                        await Task.Run(() =>
+                        {
+                            //HttpListenerContext context = await listener.GetContextAsync(); //dodato
+                            HttpListenerContext context =  listener.GetContext(); 
+                            HttpListenerRequest request = context.Request;
+
+                            LogRequest(request);
+
+                            stopwatch.Restart();
+
+                            if (request.Url == null)
+                            {
+                                throw new HttpRequestException();
+                            }
+
+                            HttpListenerResponse response = context.Response;
+                            response.Headers.Set("Content-type", "image/jpg");
+
+                            Stream stream = response.OutputStream;
+                            Bitmap final;
+
+                            if (request.RawUrl == "/favicon.ico")
+                            {
+                                final = new Bitmap($"{localPath}favicon.ico");
+                            }
+                            else if (cache.ContainReq(request.Url.ToString()))
+                            {
+                                Console.WriteLine($"Resource {request.RawUrl} found in cache\n");
+                                cache.TryGetValue(request.Url.ToString(), out final);
+
+                                if (final == null)
+                                {
+                                    NotFound(context);
+                                    return;
+                                }
+                            }
+                            else
+                            {
+                                Console.WriteLine($"Resource {request.RawUrl} not found in cache\n");
+
+                                bool currentlyUsed = cache.HasCurrent(request.Url.ToString());
+                                if (!currentlyUsed)
+                                {
+                                    cache.AddCurrent(request.Url.ToString());
+
+                                    Console.WriteLine($"Resource {request.RawUrl} taken by {Thread.CurrentThread.Name}. Processing...");
+
+                                    string path = localPath + request.Url.LocalPath;
+
+                                    if (File.Exists(path))
+                                    {
+                                        byte[] buffer = File.ReadAllBytes(path);
+                                        //byte[] buffer = await File.ReadAllBytesAsync(path); //dodato
+                                    }
+                                    else
+                                    {
+                                        NotFound(context);
+                                        Console.WriteLine($"{context.Request.RawUrl} not found");
+
+                                        cache.RemoveCurrent(request.Url.ToString());
+
+                                        return;
+                                    }
+
+                                    Bitmap imgFile = new Bitmap(path);
+
+                                    Bitmap[,] tiles = MakeTiles((object)imgFile);
+                                    //Bitmap[,] res = MultithreadedImageProcess(tiles);
+                                    
+                                    Bitmap[,] res = ImageProcessAsync(tiles);
+                                    final = JoinTiles(res, imgFile);
+
+                                    //prvo dodaje u kes obradjenih, a zatim uklanja iz kesa trenutnih
+                                    cache.AddReq(request.Url.ToString(), final);
+                                    cache.RemoveCurrent(request.Url.ToString());
+
+                                    Console.WriteLine($"{request.RawUrl} ready.");
+                                }
+                                else
+                                {
+                                    Console.WriteLine($"{request.RawUrl} is currently being processed. Waiting...");
+                                    while (currentlyUsed) //spinning
+                                    {
+                                        currentlyUsed = cache.HasCurrent(request.Url.ToString());
+                                    }
+
+                                    Console.WriteLine($"{request.RawUrl} ready.");
+
+                                    cache.TryGetValue(request.Url.ToString(), out final);
+
+                                    if (final == null)
+                                    {
+                                        NotFound(context);
+                                        return;
+                                    }
+                                }
+                            }
+
+                            byte[] resArray = ToByteArr(final, System.Drawing.Imaging.ImageFormat.Bmp);
+                            response.ContentLength64 = resArray.Length;
+
+                            stream.Write(resArray, 0, resArray.Length);
+                            //await stream.WriteAsync(resArray, 0, resArray.Length); //dodato
+
+                            stopwatch.Stop();
+
+                            LogResponse(response, request.RawUrl);
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(ex.Message);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.ToString());
+            }
+        }
+
+        #region logging
+        public static void LogRequest(HttpListenerRequest request)
+        {
+            Console.WriteLine("--------------------------------------------------------------");
+            Console.WriteLine($"Recieved request for: {request.RawUrl} by: {request.UserHostName}");
+            Console.WriteLine($"Http method: {request.HttpMethod}");
+            Console.WriteLine($"Protocol version: {request.ProtocolVersion}\n");
+            Console.WriteLine($"Headers: {request.Headers}");
+            Console.WriteLine("--------------------------------------------------------------");
+        }
+
+        public static void LogResponse(HttpListenerResponse response, string resource)
+        {
+            Console.WriteLine("--------------------------------------------------------------");
+            Console.WriteLine($"{resource} retrieved");
+            Console.WriteLine($"Response status: {response.StatusCode} {response.StatusDescription}");
+            Console.WriteLine($"Response time: {stopwatch.Elapsed}");
+            Console.WriteLine($"Protocol version: {response.ProtocolVersion}");
+            Console.WriteLine($"Content type: {response.ContentType}");
+            Console.WriteLine("--------------------------------------------------------------");
+        }
+        public static void NotFound(HttpListenerContext context)
+        {
+            HttpListenerResponse res = context.Response;
+
+            res.Headers.Set("Content-Type", "text/plain");
+            res.StatusCode = (int)HttpStatusCode.NotFound;
+
+            Stream stream = res.OutputStream;
+
+            string err = $"404- {context.Request.RawUrl} not found";
+            byte[] ebuf = Encoding.UTF8.GetBytes(err);
+            res.ContentLength64 = ebuf.Length;
+
+            stream.Write(ebuf, 0, ebuf.Length);
+
+            requestLock.EnterWriteLock();
+            cache.AddReq(context.Request.Url.ToString(), null);
+            requestLock.ExitWriteLock();
+
+            //lock (cache) { 
+            //    cache.AddReq(context.Request.Url.ToString(), null);
+            //}
+        }
+        #endregion
+
+        public static byte[] ToByteArr(Bitmap bitmap, System.Drawing.Imaging.ImageFormat format)
+        {
+            using (MemoryStream ms = new MemoryStream())
+            {
+                lock (bitmap)
+                {
+                    bitmap.Save(ms, System.Drawing.Imaging.ImageFormat.Bmp);
+                    return ms.ToArray();
+                }
+            }
+        }
+
+        #region imageManipulation
+        public static Bitmap[,] MakeTiles(object bmap)
+        {
+            Bitmap bmp = (Bitmap)bmap;
+            Size tilesize = new Size(bmp.Width / 4, bmp.Height / 3);
+            Bitmap[,] bmparray = new Bitmap[4, 3];
+
+            for (int i = 0; i < 4; i++)
+            {
+                for (int j = 0; j < 3; j++)
+                {
+                    //srcTile
+                    Rectangle movingTile = new Rectangle(i * tilesize.Width, j * tilesize.Height, tilesize.Width, tilesize.Height);
+
+                    bmparray[i, j] = new Bitmap(tilesize.Width, tilesize.Height);
+
+                    //ubacivanje slika u bmparray
+                    using (Graphics canvas = Graphics.FromImage(bmparray[i, j]))
+                    {
+                        canvas.DrawImage(bmp, new Rectangle(0, 0, tilesize.Width, tilesize.Height), movingTile, GraphicsUnit.Pixel);
+                    }
+                }
+            }
+
+            return bmparray;
+        }
+
+
+        public static Bitmap JoinTiles(Bitmap[,] bitmaps, Bitmap original)
+        {
+            Size tilesize = new Size(original.Width / 4, original.Height / 3);
+            Bitmap res = new Bitmap(original.Width, original.Height);
+
+            for (int i = 0; i < 4; i++)
+            {
+                for (int j = 0; j < 3; j++)
+                {
+                    //srcTile
+                    Rectangle movingTile = new Rectangle(0, 0, tilesize.Width, tilesize.Height);
+
+
+                    //ubacivanje slika u rezultujucu mapu
+                    using (Graphics canvas = Graphics.FromImage(res))
+                    {
+                        canvas.DrawImage(bitmaps[i, j], new Rectangle(i * tilesize.Width, j * tilesize.Height, tilesize.Width, tilesize.Height), movingTile, GraphicsUnit.Pixel);
+                    }
+                }
+            }
+
+            return res;
+        }
+        #endregion
+
+        public static Bitmap[,] ImageProcessAsync(Bitmap[,] bmp)
+        {
+            int numRows = bmp.GetLength(0);
+            int numCols = bmp.GetLength(1);
+            int numTasks = numRows * numCols;
+
+            Task[] tasks = new Task[numTasks];
+            int tskNum = 0;
+
+            foreach(Bitmap bitmap in bmp) { 
+
+                    tasks[tskNum++] = Task.Run(() =>
+                    {
+                        int width = bitmap.Width;
+                        int height = bitmap.Height;
+
+                        for (int x = 0; x < width; x++)
+                        {
+                            for (int y = 0; y < height; y++)
+                            {
+                                Color oldPixel = bitmap.GetPixel(x, y);
+
+                                int grayScale = (int)((oldPixel.R * 0.229) + (oldPixel.G * 0.587) + (oldPixel.B * 0.114));
+                                Color newPixel = Color.FromArgb(grayScale, grayScale, grayScale);
+
+                                bitmap.SetPixel(x, y, newPixel);
+                            }
+                        }
+                    });
+            }
+
+            Task.WaitAll(tasks);
+            return bmp;
+        }
+
+        #region threadedVersions
+
         //singlethreaded server + multithreaded picture processing
         public static void ServerDivided()
         {
@@ -98,7 +384,6 @@ namespace _18203Proj1
                 }
             }
         }
-
 
         //multithreaded server + 2 way picture processing
         public static void ServerPool() //perfected
@@ -263,163 +548,6 @@ namespace _18203Proj1
             }
         }
 
-        #region logging
-        public static void LogRequest(HttpListenerRequest request)
-        {
-            Console.WriteLine("--------------------------------------------------------------");
-            Console.WriteLine($"Recieved request for: {request.RawUrl} by: {request.UserHostName}");
-            Console.WriteLine($"Http method: {request.HttpMethod}");
-            Console.WriteLine($"Protocol version: {request.ProtocolVersion}\n");
-            Console.WriteLine($"Headers: {request.Headers}");
-            Console.WriteLine("--------------------------------------------------------------");
-        }
-
-        public static void LogResponse(HttpListenerResponse response, string resource)
-        {
-            Console.WriteLine("--------------------------------------------------------------");
-            Console.WriteLine($"{resource} retrieved");
-            Console.WriteLine($"Response status: {response.StatusCode} {response.StatusDescription}");
-            Console.WriteLine($"Response time: {stopwatch.Elapsed}");
-            Console.WriteLine($"Protocol version: {response.ProtocolVersion}");
-            Console.WriteLine($"Content type: {response.ContentType}");
-            Console.WriteLine("--------------------------------------------------------------");
-        }
-        public static void NotFound(HttpListenerContext context)
-        {
-            HttpListenerResponse res = context.Response;
-
-            res.Headers.Set("Content-Type", "text/plain");
-            res.StatusCode = (int)HttpStatusCode.NotFound;
-
-            Stream stream = res.OutputStream;
-
-            string err = $"404- {context.Request.RawUrl} not found";
-            byte[] ebuf = Encoding.UTF8.GetBytes(err);
-            res.ContentLength64 = ebuf.Length;
-
-            stream.Write(ebuf, 0, ebuf.Length);
-
-            requestLock.EnterWriteLock();
-            cache.AddReq(context.Request.Url.ToString(), null);
-            requestLock.ExitWriteLock();
-
-            //lock (cache) { 
-            //    cache.AddReq(context.Request.Url.ToString(), null);
-            //}
-        }
-        #endregion
-
-        public static byte[] ToByteArr(Bitmap bitmap, System.Drawing.Imaging.ImageFormat format)
-        {
-            using (MemoryStream ms = new MemoryStream())
-            {
-                lock (bitmap)
-                {
-                    bitmap.Save(ms, System.Drawing.Imaging.ImageFormat.Bmp);
-                    return ms.ToArray();
-                }
-            }
-        }
-
-        #region poolImageManipulation
-        public static Bitmap[,] MakeTiles(object bmap)
-        {
-            Bitmap bmp = (Bitmap)bmap;
-            Size tilesize = new Size(bmp.Width / 4, bmp.Height / 3);
-            Bitmap[,] bmparray = new Bitmap[4, 3];
-
-            for (int i = 0; i < 4; i++)
-            {
-                for (int j = 0; j < 3; j++)
-                {
-                    //srcTile
-                    Rectangle movingTile = new Rectangle(i * tilesize.Width, j * tilesize.Height, tilesize.Width, tilesize.Height);
-
-                    bmparray[i, j] = new Bitmap(tilesize.Width, tilesize.Height);
-
-                    //ubacivanje slika u bmparray
-                    using (Graphics canvas = Graphics.FromImage(bmparray[i, j]))
-                    {
-                        canvas.DrawImage(bmp, new Rectangle(0, 0, tilesize.Width, tilesize.Height), movingTile, GraphicsUnit.Pixel);
-                    }
-                }
-            }
-
-            return bmparray;
-        }
-
-        public static Bitmap[,] ParallelImageProcess(Bitmap[,] bmp)
-        {
-            int thNum = Environment.ProcessorCount;
-            Console.WriteLine($"Number of threads processing image: {thNum}\n");
-
-            foreach (Bitmap bitmap in bmp)
-            {
-                ThreadPool.QueueUserWorkItem((state) =>
-                {
-                    try
-                    {
-                        lock (bitmap)
-                        {
-                            int width = bitmap.Width;
-                            int height = bitmap.Height;
-
-                            for (int i = 0; i < width; i++)
-                            {
-                                for (int j = 0; j < height; j++)
-                                {
-                                    Color oldPixel = bitmap.GetPixel(i, j);
-
-                                    int grayScale = (int)((oldPixel.R * 0.229) + (oldPixel.G * 0.587) + (oldPixel.B * 0.114));
-                                    Color newPixel = Color.FromArgb(grayScale, grayScale, grayScale);
-
-                                    bitmap.SetPixel(i, j, newPixel);
-                                }
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine(ex.Message);
-                    }
-                });
-            }
-
-            bool done = false;
-            while (!done)
-            {
-                Thread.Sleep(1000);
-                done = ThreadPool.PendingWorkItemCount == 0;
-            }
-
-            return bmp;
-        }
-
-        public static Bitmap JoinTiles(Bitmap[,] bitmaps, Bitmap original)
-        {
-            Size tilesize = new Size(original.Width / 4, original.Height / 3);
-            Bitmap res = new Bitmap(original.Width, original.Height);
-
-            for (int i = 0; i < 4; i++)
-            {
-                for (int j = 0; j < 3; j++)
-                {
-                    //srcTile
-                    Rectangle movingTile = new Rectangle(0, 0, tilesize.Width, tilesize.Height);
-
-
-                    //ubacivanje slika u rezultujucu mapu
-                    using (Graphics canvas = Graphics.FromImage(res))
-                    {
-                        canvas.DrawImage(bitmaps[i, j], new Rectangle(i * tilesize.Width, j * tilesize.Height, tilesize.Width, tilesize.Height), movingTile, GraphicsUnit.Pixel);
-                    }
-                }
-            }
-
-            return res;
-        }
-        #endregion
-
         public static Bitmap SingleThreadedImageProcess(Bitmap bmp)
         {
             int width = bmp.Width;
@@ -440,7 +568,7 @@ namespace _18203Proj1
 
             return bmp;
         }
-
+                       
         public static Bitmap[,] MultithreadedImageProcess(Bitmap[,] bmp)
         {
             int thNum = Environment.ProcessorCount;
@@ -490,15 +618,60 @@ namespace _18203Proj1
             return bmp;
         }
 
-        public static void TestServer()
+        public static Bitmap[,] ParallelImageProcess(Bitmap[,] bmp)
         {
-            
-        }
+            int thNum = Environment.ProcessorCount;
+            Console.WriteLine($"Number of threads processing image: {thNum}\n");
 
-        static void Main(string[] args)
+            foreach (Bitmap bitmap in bmp)
+            {
+                ThreadPool.QueueUserWorkItem((state) =>
+                {
+                    try
+                    {
+                        lock (bitmap)
+                        {
+                            int width = bitmap.Width;
+                            int height = bitmap.Height;
+
+                            for (int i = 0; i < width; i++)
+                            {
+                                for (int j = 0; j < height; j++)
+                                {
+                                    Color oldPixel = bitmap.GetPixel(i, j);
+
+                                    int grayScale = (int)((oldPixel.R * 0.229) + (oldPixel.G * 0.587) + (oldPixel.B * 0.114));
+                                    Color newPixel = Color.FromArgb(grayScale, grayScale, grayScale);
+
+                                    bitmap.SetPixel(i, j, newPixel);
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(ex.Message);
+                    }
+                });
+            }
+
+            bool done = false;
+            while (!done)
+            {
+                Thread.Sleep(1000);
+                done = ThreadPool.PendingWorkItemCount == 0;
+            }
+
+            return bmp;
+        }
+        #endregion
+
+        static async Task Main(string[] args)
         {
             //ServerDivided();           
-            ServerPool();
+            //ServerPool();
+            Task mainTask = Task.Run(() => ServerAsync());
+            mainTask.Wait();
         }
 
     }
