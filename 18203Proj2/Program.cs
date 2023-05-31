@@ -1,7 +1,10 @@
-﻿using System.Net;
+﻿using _18203Proj2;
 using System.Diagnostics;
 using System.Drawing;
-using System.IO;
+using System.Net;
+using System.Reflection;
+using System.Text;
+using System.Threading;
 
 namespace _18203Proj1
 {
@@ -10,6 +13,8 @@ namespace _18203Proj1
         static HttpListener listener = new HttpListener();
         static LocalCache cache = new LocalCache();
         static Stopwatch stopwatch = new Stopwatch();
+        static ReaderWriterLockSlim requestLock = new ReaderWriterLockSlim();
+        static ReaderWriterLockSlim currentLock = new ReaderWriterLockSlim();
 
         //singlethreaded server + multithreaded picture processing
         public static void ServerDivided()
@@ -20,7 +25,7 @@ namespace _18203Proj1
             Console.WriteLine("Listening on port 5050...\n");
 
             string localPath = "C:\\Users\\krist\\sysprog\\18203Proj1\\photos\\";
-            cache.addReq("http://localhost:5050/favicon.ico", new Bitmap($"{localPath}favicon.ico"));
+            cache.AddReq("http://localhost:5050/favicon.ico", new Bitmap($"{localPath}favicon.ico"));
 
             while (true)
             {
@@ -44,30 +49,39 @@ namespace _18203Proj1
                     Stream stream = response.OutputStream;
                     Bitmap final;
 
-                    if (cache.containReq(request.Url.ToString()))
+                    if (cache.ContainReq(request.Url.ToString()))
                     {
                         Console.WriteLine($"Resource {request.RawUrl} found in cache\n");
-                        cache.tryGetValue(request.Url.ToString(), out final);
+                        cache.TryGetValue(request.Url.ToString(), out final);
+
+                        if (final == null)
+                        {
+                            NotFound(context);
+                            return;
+                        }
                     }
                     else
                     {
                         Console.WriteLine($"Resource {request.RawUrl} not found in cache\n");
                         string path = localPath + request.Url.LocalPath;
 
-                        byte[] buffer = File.ReadAllBytes(path);
-
-                        //if (request.Url.AbsolutePath == "/favicon.ico") 
-                        //{
-                        //    stream.Write(buffer, 0, buffer.Length);
-                        //    return;
-                        //}
+                        if (File.Exists(path))
+                        {
+                            byte[] buffer = File.ReadAllBytes(path);
+                        }
+                        else
+                        {
+                            NotFound(context);
+                            Console.WriteLine($"{context.Request.RawUrl} not found");
+                            return;
+                        }
 
                         Bitmap imgFile = new Bitmap(path);
                         Bitmap[,] tiles = MakeTiles((object)imgFile);
                         Bitmap[,] res = ParallelImageProcess(tiles);
                         final = JoinTiles(res, imgFile);
 
-                        cache.addReq(request.Url.ToString(), final);
+                        cache.AddReq(request.Url.ToString(), final);
                     }
 
                     byte[] resArray = ToByteArr(final, System.Drawing.Imaging.ImageFormat.Bmp);
@@ -85,10 +99,9 @@ namespace _18203Proj1
             }
         }
 
-        public static object cacheLocker = new object();
 
         //multithreaded server + 2 way picture processing
-        public static void ServerPool()
+        public static void ServerPool() //perfected
         {
             listener.Prefixes.Add("http://localhost:5050/");
             listener.Start();
@@ -96,7 +109,8 @@ namespace _18203Proj1
             Console.WriteLine("Listening on port 5050...\n");
 
             string localPath = "C:\\Users\\krist\\sysprog\\18203Proj1\\photos\\";
-            cache.addReq("http://localhost:5050/favicon.ico", new Bitmap($"{localPath}favicon.ico"));
+            cache.AddReq("http://localhost:5050/favicon.ico", new Bitmap($"{localPath}favicon.ico"));
+            int BR = 0;
 
             while (true)
             {
@@ -108,72 +122,142 @@ namespace _18203Proj1
                         HttpListenerRequest request = context.Request;
 
                         LogRequest(request);
-
+                        Thread.CurrentThread.Name = $"Thread{++BR}";
                         stopwatch.Restart();
-
-                        if (request.Url == null)
-                        {
-                            throw new HttpRequestException();
-                        }
 
                         HttpListenerResponse response = context.Response;
                         response.Headers.Set("Content-type", "image/jpg");
                         Stream stream = response.OutputStream;
                         Bitmap final;
 
-                        bool found = false;
-                        lock (cacheLocker)
+                        if (request.Url == null)
                         {
-                            found = cache.containReq(request.Url.ToString());
+                            throw new HttpRequestException();
                         }
+
+                        bool found = false;
+
+                        requestLock.EnterReadLock();
+                        found = cache.ContainReq(request.Url.ToString());
+                        requestLock.ExitReadLock();
 
                         if (found)
                         {
-                            Console.WriteLine($"Resource {request.RawUrl} found in cache\n");
-                            
-                            lock (cacheLocker)
+                            Console.WriteLine($"Request for {request.RawUrl} FOUND in cache\n");
+
+                            requestLock.EnterReadLock();
+                            cache.TryGetValue(request.Url.ToString(), out final);
+                            requestLock.ExitReadLock();
+
+                            if (final == null)
                             {
-                                cache.tryGetValue(request.Url.ToString(), out final);
+                                NotFound(context);
+                                return;
                             }
+                        }
+                        else if (request.RawUrl == "/favicon.ico")
+                        {
+                            Bitmap fav = new Bitmap($"{localPath}favicon.ico");
+                            requestLock.EnterWriteLock();
+                            cache.AddReq("http://localhost:5050/favicon.ico", fav);
+                            requestLock.ExitWriteLock();
+
+                            final = fav;
                         }
                         else
-                        {                            
-                            Console.WriteLine($"Resource {request.RawUrl} not found in cache\n");
-                            
-                            string localPath = "C:\\Users\\krist\\sysprog\\18203Proj1\\photos\\";
-                            string path = localPath + request.Url.LocalPath;
-                            byte[] buffer = File.ReadAllBytes(path);
+                        {
+                            Console.WriteLine($"Resource {request.RawUrl} NOT FOUND in cache\n");
 
-                            //if (request.Url.AbsolutePath == "/favicon.ico")
-                            //{
-                            //    stream.Write(buffer, 0, buffer.Length);
-                            //    return;
-                            //}
+                            //ako nije nadjen, proveriti da li je u current
+                            bool currentlyUsed = false;
 
-                            Bitmap imgFile = new Bitmap(path);
-                            //final = SingleThreadedImageProcess(imgFile);
+                            currentLock.EnterReadLock();
+                            currentlyUsed = cache.HasCurrent(request.Url.ToString());
+                            currentLock.ExitReadLock();
 
-                            Bitmap[,] tiles = MakeTiles((object)imgFile);
-                            Bitmap[,] res = MultithreadedImageProcess(tiles);
-                            final = JoinTiles(res, imgFile);
-
-                            lock (cacheLocker)
+                            //ako nije u current, upisati ga i pokrenuti obradu
+                            if (!currentlyUsed)
                             {
-                                cache.addReq(request.Url.ToString(), final);
+                                currentLock.EnterWriteLock();
+                                cache.AddCurrent(request.Url.ToString());
+                                currentLock.ExitWriteLock();
+
+                                Console.WriteLine($"Resource {request.RawUrl} taken by {Thread.CurrentThread.Name}. Processing...");
+
+                                string basep = System.AppDomain.CurrentDomain.BaseDirectory;
+                                string localPath = $"{basep.Remove(34)}\\photos";
+
+                                string path = localPath + request.Url.LocalPath;
+
+                                if (File.Exists(path))
+                                {
+                                    byte[] buffer = File.ReadAllBytes(path);
+                                }
+                                else
+                                {
+                                    NotFound(context);
+                                    Console.WriteLine($"{context.Request.RawUrl} not found");
+
+                                    currentLock.EnterWriteLock();
+                                    cache.RemoveCurrent(request.Url.ToString());
+                                    currentLock.ExitWriteLock();
+
+                                    return;
+                                }
+
+                                Bitmap imgFile = new Bitmap(path);
+
+                                Bitmap[,] tiles = MakeTiles((object)imgFile);
+                                Bitmap[,] res = MultithreadedImageProcess(tiles);
+                                final = JoinTiles(res, imgFile);
+                                
+                                //prvo dodaje u kes obradjenih, a zatim uklanja iz kesa trenutnih
+                                requestLock.EnterWriteLock();
+                                cache.AddReq(request.Url.ToString(), final);
+                                requestLock.ExitWriteLock();
+
+                                currentLock.EnterWriteLock();
+                                cache.RemoveCurrent(request.Url.ToString());
+                                currentLock.ExitWriteLock();
+
+                                Console.WriteLine($"{request.RawUrl} ready.");
+                            }
+                            else
+                            {
+                                Console.WriteLine($"{request.RawUrl} is currently being processed. Waiting...");
+                                while (currentlyUsed) //spinning
+                                {
+                                    currentLock.EnterReadLock();
+                                    currentlyUsed = cache.HasCurrent(request.Url.ToString());
+                                    currentLock.ExitReadLock();
+                                }
+
+                                Console.WriteLine($"{request.RawUrl} ready.");
+                                                                
+                                requestLock.EnterReadLock();
+                                cache.TryGetValue(request.Url.ToString(), out final);
+                                requestLock.ExitReadLock();
+
+                                if (final == null)
+                                {
+                                    NotFound(context);
+                                    return;
+                                }
                             }
                         }
 
+                        //returning by stream
                         byte[] resArray = ToByteArr(final, System.Drawing.Imaging.ImageFormat.Bmp);
                         response.ContentLength64 = resArray.Length;
                         stream.Write(resArray, 0, resArray.Length);
 
                         stopwatch.Stop();
-                                                
-                        LogResponse(response, request.RawUrl);                        
+
+                        LogResponse(response, request.RawUrl);
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine(ex.Message);
+                        Console.WriteLine(ex.ToString());
                     }
                 });
             }
@@ -200,14 +284,40 @@ namespace _18203Proj1
             Console.WriteLine($"Content type: {response.ContentType}");
             Console.WriteLine("--------------------------------------------------------------");
         }
+        public static void NotFound(HttpListenerContext context)
+        {
+            HttpListenerResponse res = context.Response;
+
+            res.Headers.Set("Content-Type", "text/plain");
+            res.StatusCode = (int)HttpStatusCode.NotFound;
+
+            Stream stream = res.OutputStream;
+
+            string err = $"404- {context.Request.RawUrl} not found";
+            byte[] ebuf = Encoding.UTF8.GetBytes(err);
+            res.ContentLength64 = ebuf.Length;
+
+            stream.Write(ebuf, 0, ebuf.Length);
+
+            requestLock.EnterWriteLock();
+            cache.AddReq(context.Request.Url.ToString(), null);
+            requestLock.ExitWriteLock();
+
+            //lock (cache) { 
+            //    cache.AddReq(context.Request.Url.ToString(), null);
+            //}
+        }
         #endregion
 
         public static byte[] ToByteArr(Bitmap bitmap, System.Drawing.Imaging.ImageFormat format)
         {
             using (MemoryStream ms = new MemoryStream())
             {
-                bitmap.Save(ms, System.Drawing.Imaging.ImageFormat.Bmp);
-                return ms.ToArray();
+                lock (bitmap)
+                {
+                    bitmap.Save(ms, System.Drawing.Imaging.ImageFormat.Bmp);
+                    return ms.ToArray();
+                }
             }
         }
 
@@ -237,7 +347,7 @@ namespace _18203Proj1
 
             return bmparray;
         }
-        
+
         public static Bitmap[,] ParallelImageProcess(Bitmap[,] bmp)
         {
             int thNum = Environment.ProcessorCount;
@@ -268,17 +378,17 @@ namespace _18203Proj1
                             }
                         }
                     }
-                    catch(Exception ex)
+                    catch (Exception ex)
                     {
                         Console.WriteLine(ex.Message);
                     }
                 });
             }
 
-            bool done = false; 
+            bool done = false;
             while (!done)
             {
-                Thread.Sleep(1000); 
+                Thread.Sleep(1000);
                 done = ThreadPool.PendingWorkItemCount == 0;
             }
 
@@ -312,22 +422,22 @@ namespace _18203Proj1
 
         public static Bitmap SingleThreadedImageProcess(Bitmap bmp)
         {
-                int width = bmp.Width;
-                int height = bmp.Height;
+            int width = bmp.Width;
+            int height = bmp.Height;
 
-                for (int i = 0; i < width; i++)
+            for (int i = 0; i < width; i++)
+            {
+                for (int j = 0; j < height; j++)
                 {
-                    for (int j = 0; j < height; j++)
-                    {
-                        Color oldPixel = bmp.GetPixel(i, j);
+                    Color oldPixel = bmp.GetPixel(i, j);
 
-                        int grayScale = (int)((oldPixel.R * 0.229) + (oldPixel.G * 0.587) + (oldPixel.B * 0.114));
-                        Color newPixel = Color.FromArgb(grayScale, grayScale, grayScale);
+                    int grayScale = (int)((oldPixel.R * 0.229) + (oldPixel.G * 0.587) + (oldPixel.B * 0.114));
+                    Color newPixel = Color.FromArgb(grayScale, grayScale, grayScale);
 
-                        bmp.SetPixel(i, j, newPixel);
-                    }
-                }                        
-            
+                    bmp.SetPixel(i, j, newPixel);
+                }
+            }
+
             return bmp;
         }
 
@@ -371,8 +481,8 @@ namespace _18203Proj1
                 worker.Start();
                 threads.Add(worker);
             }
-            
-            foreach(Thread th in threads)
+
+            foreach (Thread th in threads)
             {
                 th.Join();
             }
@@ -380,13 +490,15 @@ namespace _18203Proj1
             return bmp;
         }
 
+        public static void TestServer()
+        {
+            
+        }
+
         static void Main(string[] args)
         {
             //ServerDivided();           
             ServerPool();
-
-            //Zakljucak: Najbrza verzija je jednonitni server sa visenitnom obradom slike, nakon njega su (sa malom razlikom) visenitni server i visenitna obrada, 
-            //a ubedljivo najsporiji je visenitni server sa jednonitnom obradom
         }
 
     }
