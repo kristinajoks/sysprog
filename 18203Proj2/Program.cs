@@ -32,145 +32,172 @@ namespace _18203Proj1
 
                 while (true)
                 {
-                    try
-                    {
-                        await Task.Run(() =>
-                        {
-                            HttpListenerContext context =  listener.GetContext(); 
-                            HttpListenerRequest request = context.Request;
-
-                            LogRequest(request);
-
-                            stopwatch.Restart();
-
-                            if (request.Url == null)
-                            {
-                                throw new HttpRequestException();
-                            }
-
-                            HttpListenerResponse response = context.Response;
-                            response.Headers.Set("Content-type", "image/jpg");
-
-                            Stream stream = response.OutputStream;
-                            Bitmap final;
-
-                            bool found = false;
-                            requestLock.EnterReadLock();
-                            found = cache.ContainReq(request.Url.ToString());
-                            requestLock.ExitReadLock();
-
-                            if (request.RawUrl == "/favicon.ico")
-                            {
-                                final = new Bitmap($"{localPath}favicon.ico");
-                            }
-                            else if (found)
-                            {
-                                Console.WriteLine($"Resource {request.RawUrl} found in cache\n");
-                                requestLock.EnterReadLock();
-                                cache.TryGetValue(request.Url.ToString(), out final);
-                                requestLock.ExitReadLock();
-
-                                if (final == null)
-                                {
-                                    NotFound(context);
-                                    return;
-                                }
-                            }
-                            else
-                            {
-                                Console.WriteLine($"Resource {request.RawUrl} not found in cache\n");
-
-                                bool currentlyUsed;
-                                currentLock.EnterReadLock();
-                                currentlyUsed = cache.HasCurrent(request.Url.ToString());
-                                currentLock.ExitReadLock();
-
-                                if (!currentlyUsed)
-                                {
-                                    currentLock.EnterWriteLock();
-                                    cache.AddCurrent(request.Url.ToString());
-                                    currentLock.ExitWriteLock();
-
-                                    Console.WriteLine($"Resource {request.RawUrl} taken. Processing...");
-
-                                    string path = localPath + request.Url.LocalPath;
-
-                                    if (File.Exists(path))
-                                    {
-                                        byte[] buffer = File.ReadAllBytes(path);
-                                    }
-                                    else
-                                    {
-                                        NotFound(context);
-                                        Console.WriteLine($"{context.Request.RawUrl} not found");
-
-                                        currentLock.EnterWriteLock();
-                                        cache.RemoveCurrent(request.Url.ToString());
-                                        currentLock.ExitWriteLock();
-
-                                        return;
-                                    }
-
-                                    Bitmap imgFile = new Bitmap(path);
-
-                                    Bitmap[,] tiles = MakeTiles((object)imgFile);                                    
-                                    Bitmap[,] res = ImageProcessAsync(tiles);
-                                    final = JoinTiles(res, imgFile);
-
-                                    //prvo dodaje u kes obradjenih, a zatim uklanja iz kesa trenutnih
-                                    requestLock.EnterWriteLock();
-                                    cache.AddReq(request.Url.ToString(), final);
-                                    requestLock.ExitWriteLock();
-
-                                    currentLock.EnterWriteLock();
-                                    cache.RemoveCurrent(request.Url.ToString());
-                                    currentLock.ExitWriteLock();
-
-                                    Console.WriteLine($"{request.RawUrl} ready.");
-                                }
-                                else
-                                {
-                                    Console.WriteLine($"{request.RawUrl} is currently being processed. Waiting...");
-                                    while (currentlyUsed) //spinning
-                                    {
-                                        currentLock.EnterReadLock();
-                                        currentlyUsed = cache.HasCurrent(request.Url.ToString());
-                                        currentLock.ExitReadLock();
-                                    }
-
-                                    Console.WriteLine($"{request.RawUrl} ready.");
-
-                                    requestLock.EnterReadLock();
-                                    cache.TryGetValue(request.Url.ToString(), out final);
-                                    requestLock.ExitReadLock();
-
-                                    if (final == null)
-                                    {
-                                        NotFound(context);
-                                        return;
-                                    }
-                                }
-                            }
-
-                            byte[] resArray = ToByteArr(final, System.Drawing.Imaging.ImageFormat.Bmp);
-                            response.ContentLength64 = resArray.Length;
-
-                            stream.Write(resArray, 0, resArray.Length);
-
-                            stopwatch.Stop();
-
-                            LogResponse(response, request.RawUrl);
-                        });
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine(ex.Message);
-                    }
+                    HttpListenerContext context = await  listener.GetContextAsync();
+                    await ProcessRequestAsync(context, localPath);               
                 }
             }
             catch (Exception ex)
             {
                 Console.WriteLine(ex.ToString());
+            }
+        }
+
+        public static async Task ProcessRequestAsync(HttpListenerContext context, string localPath)
+        {
+            try
+            {
+                HttpListenerRequest request = context.Request;
+
+                LogRequest(request);
+
+                stopwatch.Restart();
+
+                string ext = Path.GetExtension(request.RawUrl);
+
+                if (request.Url == null)
+                {
+                    await NotFound(context);
+                    return;
+                }
+
+                if (String.Compare(ext, ".jpg") != 0 &&
+                    String.Compare(ext, ".jpeg") != 0 &&
+                    String.Compare(ext, ".png") != 0 &&
+                    String.Compare(ext, ".gif") != 0)
+                {
+                    await BadRequest(context);
+                    return;
+                }
+
+                HttpListenerResponse response = context.Response;
+                response.Headers.Set("Content-type", "image/jpg");
+
+                Stream stream = response.OutputStream;
+                Bitmap final;
+
+                bool found = false;
+                requestLock.EnterReadLock();
+                found = cache.ContainReq(request.Url.ToString());
+                requestLock.ExitReadLock();
+
+                if (request.RawUrl == "/favicon.ico")
+                {
+                    final = new Bitmap($"{localPath}favicon.ico");
+                }
+                else if (found)
+                {
+                    Console.WriteLine($"Resource {request.RawUrl} found in cache\n");
+                    requestLock.EnterReadLock();
+                    cache.TryGetValue(request.Url.ToString(), out final);
+                    requestLock.ExitReadLock();
+
+                    if (final == null)
+                    {
+                        await NotFound(context);
+                        return;
+                    }
+                }
+                else
+                {
+                    Console.WriteLine($"Resource {request.RawUrl} not found in cache\n");
+
+                    bool currentlyUsed;
+                    currentLock.EnterReadLock();
+                    currentlyUsed = cache.HasCurrent(request.Url.ToString());
+                    currentLock.ExitReadLock();
+
+                    if (!currentlyUsed)
+                    {
+                        currentLock.EnterWriteLock();
+                        cache.AddCurrent(request.Url.ToString());
+                        currentLock.ExitWriteLock();
+
+                        Console.WriteLine($"Resource {request.RawUrl} taken. Processing...");
+
+                        string path = localPath + request.Url.LocalPath;
+
+                        if (File.Exists(path))
+                        {
+                            byte[] buffer = await File.ReadAllBytesAsync(path);
+                        }
+                        else
+                        {
+                            await NotFound(context);
+                            Console.WriteLine($"{context.Request.RawUrl} not found");
+
+                            currentLock.EnterWriteLock();
+                            cache.RemoveCurrent(request.Url.ToString());
+                            currentLock.ExitWriteLock();
+
+                            return;
+                        }
+
+                        Bitmap imgFile = new Bitmap(path);
+
+                        Bitmap[,] tiles = MakeTiles((object)imgFile);
+                        Bitmap[,] res = ImageProcessTask(tiles);
+                        final = JoinTiles(res, imgFile);
+
+                        //prvo dodaje u kes obradjenih, a zatim uklanja iz kesa trenutnih
+                        requestLock.EnterWriteLock();
+                        cache.AddReq(request.Url.ToString(), final);
+                        requestLock.ExitWriteLock();
+
+                        currentLock.EnterWriteLock();
+                        cache.RemoveCurrent(request.Url.ToString());
+                        currentLock.ExitWriteLock();
+
+                        Console.WriteLine($"{request.RawUrl} ready.");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"{request.RawUrl} is currently being processed. Waiting...");
+                                                
+                        while (currentlyUsed) //spinning
+                        {
+                            currentLock.EnterReadLock();
+                            currentlyUsed = cache.HasCurrent(request.Url.ToString());
+                            currentLock.ExitReadLock();
+                        }
+
+                        Console.WriteLine($"{request.RawUrl} ready.");
+
+                        requestLock.EnterReadLock();
+                        cache.TryGetValue(request.Url.ToString(), out final);
+                        requestLock.ExitReadLock();
+
+                        if (final == null)
+                        {
+                            NotFound(context);
+                            return;
+                        }
+                    }
+                }
+
+                byte[] resArray = ToByteArr(final, System.Drawing.Imaging.ImageFormat.Bmp);
+                response.ContentLength64 = resArray.Length;
+
+                await stream.WriteAsync(resArray, 0, resArray.Length);
+
+                stopwatch.Stop();
+
+                LogResponse(response, request.RawUrl);
+            }
+            catch(Exception ex)
+            {
+                Console.WriteLine(ex.ToString());
+
+                HttpListenerResponse response = context.Response;
+                response.StatusCode = (int)HttpStatusCode.InternalServerError;
+                response.ContentType = "text/plain";
+                string errorMessage = "An error occurred while processing the request.";
+                byte[] errorBytes = Encoding.UTF8.GetBytes(errorMessage);
+                response.ContentLength64 = errorBytes.Length;
+                await response.OutputStream.WriteAsync(errorBytes, 0, errorBytes.Length);
+
+                //probno mesto
+                requestLock.ExitWriteLock();
+                currentLock.ExitWriteLock();
             }
         }
 
@@ -195,7 +222,7 @@ namespace _18203Proj1
             Console.WriteLine($"Content type: {response.ContentType}");
             Console.WriteLine("--------------------------------------------------------------");
         }
-        public static void NotFound(HttpListenerContext context)
+        public static async Task NotFound(HttpListenerContext context)
         {
             HttpListenerResponse res = context.Response;
 
@@ -208,15 +235,25 @@ namespace _18203Proj1
             byte[] ebuf = Encoding.UTF8.GetBytes(err);
             res.ContentLength64 = ebuf.Length;
 
-            stream.Write(ebuf, 0, ebuf.Length);
+            await stream.WriteAsync(ebuf, 0, ebuf.Length);
 
             requestLock.EnterWriteLock();
             cache.AddReq(context.Request.Url.ToString(), null);
             requestLock.ExitWriteLock();
+        }
 
-            //lock (cache) { 
-            //    cache.AddReq(context.Request.Url.ToString(), null);
-            //}
+        public static async Task BadRequest(HttpListenerContext context)
+        {
+            HttpListenerResponse res = context.Response;
+            res.StatusCode = (int)HttpStatusCode.BadRequest;
+
+            Stream stream = res.OutputStream;
+
+            string err = $"500- Internal error. Check the file extension";
+            byte[] ebuf = Encoding.UTF8.GetBytes(err);
+            res.ContentLength64 = ebuf.Length;
+
+            await stream.WriteAsync(ebuf, 0, ebuf.Length);
         }
         #endregion
 
@@ -285,7 +322,7 @@ namespace _18203Proj1
         }
         #endregion
 
-        public static Bitmap[,] ImageProcessAsync(Bitmap[,] bmp)
+        public static Bitmap[,] ImageProcessTask(Bitmap[,] bmp)
         {
             int numRows = bmp.GetLength(0);
             int numCols = bmp.GetLength(1);
