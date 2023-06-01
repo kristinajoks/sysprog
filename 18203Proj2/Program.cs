@@ -1,4 +1,5 @@
 ﻿using _18203Proj2;
+using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.Net;
@@ -35,7 +36,6 @@ namespace _18203Proj1
                     {
                         await Task.Run(() =>
                         {
-                            //HttpListenerContext context = await listener.GetContextAsync(); //dodato
                             HttpListenerContext context =  listener.GetContext(); 
                             HttpListenerRequest request = context.Request;
 
@@ -54,14 +54,21 @@ namespace _18203Proj1
                             Stream stream = response.OutputStream;
                             Bitmap final;
 
+                            bool found = false;
+                            requestLock.EnterReadLock();
+                            found = cache.ContainReq(request.Url.ToString());
+                            requestLock.ExitReadLock();
+
                             if (request.RawUrl == "/favicon.ico")
                             {
                                 final = new Bitmap($"{localPath}favicon.ico");
                             }
-                            else if (cache.ContainReq(request.Url.ToString()))
+                            else if (found)
                             {
                                 Console.WriteLine($"Resource {request.RawUrl} found in cache\n");
+                                requestLock.EnterReadLock();
                                 cache.TryGetValue(request.Url.ToString(), out final);
+                                requestLock.ExitReadLock();
 
                                 if (final == null)
                                 {
@@ -73,41 +80,51 @@ namespace _18203Proj1
                             {
                                 Console.WriteLine($"Resource {request.RawUrl} not found in cache\n");
 
-                                bool currentlyUsed = cache.HasCurrent(request.Url.ToString());
+                                bool currentlyUsed;
+                                currentLock.EnterReadLock();
+                                currentlyUsed = cache.HasCurrent(request.Url.ToString());
+                                currentLock.ExitReadLock();
+
                                 if (!currentlyUsed)
                                 {
+                                    currentLock.EnterWriteLock();
                                     cache.AddCurrent(request.Url.ToString());
+                                    currentLock.ExitWriteLock();
 
-                                    Console.WriteLine($"Resource {request.RawUrl} taken by {Thread.CurrentThread.Name}. Processing...");
+                                    Console.WriteLine($"Resource {request.RawUrl} taken. Processing...");
 
                                     string path = localPath + request.Url.LocalPath;
 
                                     if (File.Exists(path))
                                     {
                                         byte[] buffer = File.ReadAllBytes(path);
-                                        //byte[] buffer = await File.ReadAllBytesAsync(path); //dodato
                                     }
                                     else
                                     {
                                         NotFound(context);
                                         Console.WriteLine($"{context.Request.RawUrl} not found");
 
+                                        currentLock.EnterWriteLock();
                                         cache.RemoveCurrent(request.Url.ToString());
+                                        currentLock.ExitWriteLock();
 
                                         return;
                                     }
 
                                     Bitmap imgFile = new Bitmap(path);
 
-                                    Bitmap[,] tiles = MakeTiles((object)imgFile);
-                                    //Bitmap[,] res = MultithreadedImageProcess(tiles);
-                                    
+                                    Bitmap[,] tiles = MakeTiles((object)imgFile);                                    
                                     Bitmap[,] res = ImageProcessAsync(tiles);
                                     final = JoinTiles(res, imgFile);
 
                                     //prvo dodaje u kes obradjenih, a zatim uklanja iz kesa trenutnih
+                                    requestLock.EnterWriteLock();
                                     cache.AddReq(request.Url.ToString(), final);
+                                    requestLock.ExitWriteLock();
+
+                                    currentLock.EnterWriteLock();
                                     cache.RemoveCurrent(request.Url.ToString());
+                                    currentLock.ExitWriteLock();
 
                                     Console.WriteLine($"{request.RawUrl} ready.");
                                 }
@@ -116,12 +133,16 @@ namespace _18203Proj1
                                     Console.WriteLine($"{request.RawUrl} is currently being processed. Waiting...");
                                     while (currentlyUsed) //spinning
                                     {
+                                        currentLock.EnterReadLock();
                                         currentlyUsed = cache.HasCurrent(request.Url.ToString());
+                                        currentLock.ExitReadLock();
                                     }
 
                                     Console.WriteLine($"{request.RawUrl} ready.");
 
+                                    requestLock.EnterReadLock();
                                     cache.TryGetValue(request.Url.ToString(), out final);
+                                    requestLock.ExitReadLock();
 
                                     if (final == null)
                                     {
@@ -135,7 +156,6 @@ namespace _18203Proj1
                             response.ContentLength64 = resArray.Length;
 
                             stream.Write(resArray, 0, resArray.Length);
-                            //await stream.WriteAsync(resArray, 0, resArray.Length); //dodato
 
                             stopwatch.Stop();
 
@@ -278,19 +298,23 @@ namespace _18203Proj1
 
                     tasks[tskNum++] = Task.Run(() =>
                     {
-                        int width = bitmap.Width;
-                        int height = bitmap.Height;
-
-                        for (int x = 0; x < width; x++)
+                        lock (bitmap)
                         {
-                            for (int y = 0; y < height; y++)
+
+                            int width = bitmap.Width;
+                            int height = bitmap.Height;
+
+                            for (int x = 0; x < width; x++)
                             {
-                                Color oldPixel = bitmap.GetPixel(x, y);
+                                for (int y = 0; y < height; y++)
+                                {
+                                    Color oldPixel = bitmap.GetPixel(x, y);
 
-                                int grayScale = (int)((oldPixel.R * 0.229) + (oldPixel.G * 0.587) + (oldPixel.B * 0.114));
-                                Color newPixel = Color.FromArgb(grayScale, grayScale, grayScale);
+                                    int grayScale = (int)((oldPixel.R * 0.229) + (oldPixel.G * 0.587) + (oldPixel.B * 0.114));
+                                    Color newPixel = Color.FromArgb(grayScale, grayScale, grayScale);
 
-                                bitmap.SetPixel(x, y, newPixel);
+                                    bitmap.SetPixel(x, y, newPixel);
+                                }
                             }
                         }
                     });
