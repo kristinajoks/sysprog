@@ -296,12 +296,21 @@ public class Program
             ApiKey = "AIzaSyAMgE1Exc-l3_6Vy0ts5fTxRxDS6uxPGiI"
         });
 
-        var videoIds = new List<string>()
+        var videoIds = new List<string>();
+        //{
+        //    "pBk4NYhWNMM", //barbie trailer
+        //    "OM4zUZuZl90", //arthur 2h comments disabled
+        //    "fF25lh_Ib4c" //bird doc serbian
+        //};
+
+        Console.WriteLine("Add video IDs. Type \"End\" when done.");
+        var text = "";
+        while (text != "End")
         {
-            "pBk4NYhWNMM", //barbie trailer
-            "OM4zUZuZl90", //arthur 2h comments disabled
-            "fF25lh_Ib4c"
-        };
+            text = AnsiConsole.Ask<string>("What's your video ID?");
+            videoIds.Add(text);
+        }
+
 
         //Creating video comment stream
         var videoCommentStream = new VideoCommentStream();
