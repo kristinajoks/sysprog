@@ -298,10 +298,9 @@ public class Program
 
         var videoIds = new List<string>()
         {
-            "Mlr7iqVVnBk", //sedam drama
             "pBk4NYhWNMM", //barbie trailer
             "OM4zUZuZl90", //arthur 2h comments disabled
-            "pPEkQiPhZ_Q" //dan i noc serbian 
+            "fF25lh_Ib4c"
         };
 
         //Creating video comment stream
