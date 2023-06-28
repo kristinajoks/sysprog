@@ -308,7 +308,8 @@ public class Program
         while (text != "End")
         {
             text = AnsiConsole.Ask<string>("What's your video ID?");
-            videoIds.Add(text);
+            if(!videoIds.Contains(text))
+                videoIds.Add(text);
         }
 
 
